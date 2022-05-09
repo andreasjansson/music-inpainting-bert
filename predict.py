@@ -4,9 +4,8 @@
 import subprocess
 import os
 import tempfile
-from pathlib import Path
 
-import cog
+from cog import BaseModel, BasePredictor, Input, Path
 import torch
 import numpy as np
 from midiSynth.synth import MidiSynth
@@ -16,7 +15,13 @@ import config
 import generate
 
 
-class Predictor(cog.Predictor):
+class Output(BaseModel):
+    mp3: Path
+    score: Path
+    midi: Path
+
+
+class Predictor(BasePredictor):
     def setup(self):
         """Load the model into memory to make running multiple predictions efficient"""
         self.net = model.LeadSheetForMaskedLM.from_pretrained("pretrained")
@@ -32,43 +37,28 @@ class Predictor(cog.Predictor):
 
         self.midi_synth = MidiSynth()
 
-    @cog.input(
-        "notes",
-        type=str,
-        help="Notes in tinynotation, with each bar separated by '|'. Use '?' for bars you want in-painted.",
-    )
-    @cog.input(
-        "chords",
-        type=str,
-        help="Chords (one chord per bar), with each bar separated by '|'. Use '?' for bars you want in-painted.",
-    )
-    @cog.input(
-        "time_signature",
-        type=int,
-        options=[3, 4, 5, 7],
-        default=4,
-        help="Time signature",
-    )
-    @cog.input(
-        "tempo", type=int, min=60, max=200, default=120, help="Tempo (beats per minute)"
-    )
-    @cog.input(
-        "sample_width",
-        type=int,
-        min=1,
-        max=200,
-        default=10,
-        help="Number of potential predictions to sample from. The higher, the more chaotic the output.",
-    )
-    @cog.input("seed", type=int, default=-1, help="Random seed, -1 for random")
-    @cog.input(
-        "output_format",
-        type=str,
-        options=["mp3", "midi"],
-        default="mp3",
-        help="Output file format (synthesized mp3 audio or raw midi)",
-    )
-    def predict(self, notes, chords, time_signature, tempo, sample_width, seed, output_format):
+    def predict(
+        self,
+        notes: str = Input(
+            description="Notes in tinynotation, with each bar separated by '|'. Use '?' for bars you want in-painted."
+        ),
+        chords: str = Input(
+            description="Chords (one chord per bar), with each bar separated by '|'. Use '?' for bars you want in-painted."
+        ),
+        time_signature: int = Input(
+            default=4, choices=[3, 4, 5, 7], description="Time signature"
+        ),
+        tempo: int = Input(
+            default=120, ge=60, le=200, description="Tempo (beats per minute)"
+        ),
+        sample_width: int = Input(
+            default=10,
+            ge=1,
+            le=200,
+            description="Number of potential predictions to sample from. The higher, the more chaotic the output.",
+        ),
+        seed: int = Input(default=-1, description="Random seed, -1 for random"),
+    ) -> Output:
         """Run a single prediction on the model"""
 
         if seed < 0:
@@ -79,10 +69,14 @@ class Predictor(cog.Predictor):
 
         out_dir = Path(tempfile.mkdtemp())
         midi_path = out_dir / "out.midi"
+        midi_path_no_drums = out_dir / "out-no-drums.midi"
         wav_path = out_dir / "out.wav"
         mp3_path = out_dir / "out.mp3"
+        lilypond_path = out_dir / "score.ly"
+        score_path = out_dir / "score.png"
 
-        generate.generate_from_strings(
+        # Generate prettymidi file
+        track = generate.generate_from_strings(
             net=self.net,
             tinynotation_notes_str=notes,
             chords_str=chords,
@@ -92,14 +86,17 @@ class Predictor(cog.Predictor):
             pattern_map_inv=self.pattern_map_inv,
             chord_names_inv=self.chord_names_inv,
             config=self.config,
-            filename=str(midi_path),
             n_patterns_sample=sample_width,
             time_sig=time_signature,
             tempo=tempo,
         )
-        if output_format == "midi":
-            return midi_path
+        track.write(str(midi_path))
 
+        # Remove drums for score generation
+        track.instruments = track.instruments[:2]
+        track.write(str(midi_path_no_drums))
+
+        # Generate wav audio from midi
         try:
             self.midi_synth.midi2audio(str(midi_path), str(wav_path))
             subprocess.check_output(
@@ -112,7 +109,34 @@ class Predictor(cog.Predictor):
                     str(mp3_path),
                 ],
             )
-            return mp3_path
+        except Exception as e:
+            print(f"Failed to save mp3: {e}")
         finally:
-            midi_path.unlink()
             wav_path.unlink(missing_ok=True)
+
+        # Generate sheet music with lilypond from midi
+        try:
+            subprocess.check_output(
+                ["midi2ly", str(midi_path_no_drums), "--output", str(lilypond_path)],
+            )
+            subprocess.check_output(
+                [
+                    "lilypond",
+                    "-fpng",
+                    "-dresolution=300",
+                    '-dpaper-size="a5landscape"',
+                    "-o",
+                    str(score_path.with_suffix("")),
+                    str(lilypond_path),
+                ]
+            )
+        except Exception as e:
+            print(f"Failed to save score: {e}")
+        finally:
+            lilypond_path.unlink(missing_ok=True)
+
+        return Output(
+            mp3=mp3_path,
+            score=score_path,
+            midi=midi_path,
+        )

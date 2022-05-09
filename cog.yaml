@@ -9,6 +9,7 @@ build:
   system_packages:
     - "ffmpeg"
     - "fluidsynth"
+    - "lilypond"
 
   # python version in the form '3.8' or '3.8.12'
   python_version: "3.8"
@@ -29,8 +30,9 @@ build:
 
   # commands run after the enviroment is setup
   run:
-    # - "echo env is ready!"
-    # - "echo another command if needed"
+    - "echo env is ready!"
 
 # predict.py defines how predictions are run on your model
 predict: "predict.py:Predictor"
+
+image: "r8.im/andreasjansson/music-inpainting-bert"

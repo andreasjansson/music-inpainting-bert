@@ -261,7 +261,6 @@ def generate_masked_song(
     pattern_map_inv: Dict[int, Pattern],
     chord_names_inv: Dict[Chord, str],
     config: HuggingFaceConfig,
-    filename: str,
     mask_start=0,
     mask_end=-1,
     tempo: int = 120,
@@ -355,8 +354,7 @@ def generate_masked_song(
                 f"{(i + 1) // time_sig}:{i % time_sig}", timed_notes_str, chord_name, n
             )
 
-    return save_song(
-        filename,
+    return generate_song(
         pred_patterns,
         pred_chords,
         pattern_map_inv,
@@ -376,7 +374,6 @@ def generate_from_strings(
     pattern_map_inv: Dict[int, Pattern],
     chord_names_inv: Dict[Chord, str],
     config: HuggingFaceConfig,
-    filename: str,
     tempo: int = 120,
     time_sig: int = 4,
     mask_prob=0.1,
@@ -473,8 +470,7 @@ def generate_from_strings(
                 f"{(i + 1) // time_sig}:{i % time_sig}", timed_notes_str, chord_name, n
             )
 
-    return save_song(
-        filename,
+    return generate_song(
         pred_patterns,
         pred_chords,
         pattern_map_inv,
@@ -484,28 +480,28 @@ def generate_from_strings(
     )
 
 
-def save_song(
-    filename, pattern_vec, chord_vec, pattern_map_inv, chord_map_inv, tempo, time_sig
+def generate_song(
+    pattern_vec, chord_vec, pattern_map_inv, chord_map_inv, tempo, time_sig
 ):
     sec_per_beat = 60 / tempo
 
     track = pm.PrettyMIDI(initial_tempo=tempo)
     track.time_signature_changes.append(pm.TimeSignature(time_sig, 4, 0))
 
-    accomp = pm.Instrument(pm.instrument_name_to_program("Synth Choir"))
     lead = pm.Instrument(pm.instrument_name_to_program("Lead 2 (sawtooth)"))
+    accomp = pm.Instrument(pm.instrument_name_to_program("Synth Choir"))
     drum = pm.Instrument(0, is_drum=True)
-
-    write_chords(accomp, chord_vec, chord_map_inv, sec_per_beat)
-    track.instruments.append(accomp)
 
     write_notes(lead, pattern_vec, pattern_map_inv, sec_per_beat)
     track.instruments.append(lead)
 
+    write_chords(accomp, chord_vec, chord_map_inv, sec_per_beat)
+    track.instruments.append(accomp)
+
     write_drum(drum, len(pattern_vec), sec_per_beat)
     track.instruments.append(drum)
 
-    track.write(filename)
+    return track
 
 
 def write_chords(instrument, chord_vec, chord_map_inv, sec_per_beat):
